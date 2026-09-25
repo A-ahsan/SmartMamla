@@ -1,0 +1,14 @@
+1.initialise git here 
+2.you have to make a portal for bangladesh police and vehicle users ,police can provide users mamla for traffic violation,user can login check their mamla history with driving licesense ,vehicle registration card etc 
+3.it will be 100% mobile responsive too as police will use in mobile device
+4.the ui ux has to be best ,animated and best you can take refferences for ui ux from "D:\My_Project\brta_extended"
+5.bilingual must 
+6.u will connect supabase i will give u api etc 
+7.u can use the ui related file from the location but also from web too , i dont know much about animation things but i need need and clean with animation best ui 
+
+8.simple things very good landing page , 
+login portal for user,police
+for police portal there the first page will show traffic updates now it can be just a placeholder cause i will intrigate ai traffic model later
+,secondl there will be option for giving mamla scan qr code/enter driving license/vehicle reg card of particular user to see his entire details with fine paid or not how many fines they got
+
+9.for user end after login they can see their things ,they can pay with ssl commere on the locationi gave u all are given implementational file 
