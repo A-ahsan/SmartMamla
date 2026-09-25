@@ -65,27 +65,55 @@ For production, build the site and run `npm run server` (standalone API on :5050
 
 ## 4. Omni-Eye AI camera reports
 
-The Omni-Eye detection node (`~/FYDP/dashboard`) watches the footbridge camera feeds. It sends every
-violation it finds to this server. Police review each one under **AI reports** (`/police/ai`) before a
-mamla is filed. Nothing is written to Supabase until an officer presses **File a mamla**.
+The Omni-Eye detection node (`~/FYDP/dashboard`) analyses the footbridge camera videos. It sends every
+violation it finds to the Smart Mamla backend. Police review each one under **AI reports** (`/police/ai`)
+before a mamla is filed. Nothing is written to the database tables until an officer presses **File a mamla**.
 
-- `server/ai.js` holds the endpoints, mounted at `/api/ai`. `npm run dev` serves them too.
+```
+Omni-Eye (your PC) ──POST /api/ai/reports──▶ backend on Render (server/) ──▶ Supabase Storage
+                                                   ▲
+police on the Vercel site ──VITE_API_URL──────────┘
+```
+
+- `server/ai.js` holds the endpoints, mounted at `/api/ai` on the same Express server as payments.
+  `npm run server` runs it on Render, and `npm run dev` serves it locally.
 - `POST /api/ai/reports` is used by Omni-Eye. It needs the header `x-omnieye-key: <OMNIEYE_INGEST_KEY>`.
 - `GET /api/ai/reports`, `GET /api/ai/summary` and `POST /api/ai/reports/:id/review` are for police.
   The Supabase session must belong to a `police` or `admin` profile.
-- Reports and evidence images are stored in `server/ai_data/`, which git ignores.
+- **Storage:** Render's free disk is wiped on every restart, so reports and evidence photos go into a
+  private Supabase Storage bucket, `omnieye-reports`. It is created automatically, and no tables are
+  added or changed. Locally without a service key they go to `server/ai_data/`, which git ignores.
 - The **Traffic** page shows a live "AI camera detections" panel. It refreshes every 15 s.
 
-Run order:
+### Render setup (once)
+
+In Render → your backend service → Environment:
+
+| Name | Value |
+|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | probably already there for payments. Supabase → Project Settings → API keys → service_role / secret key |
+| `OMNIEYE_INGEST_KEY` | any long random string. Omni-Eye must send the same one |
+
+Save, and let Render redeploy. Nothing changes on Vercel: the site already calls the backend through
+`VITE_API_URL`. Check it with `https://<backend>.onrender.com/api/ai/health`. Without the key header it
+should answer `{"error":"Bad or missing x-omnieye-key ..."}`, which proves the route is live.
+
+The free Render service sleeps after 15 minutes without traffic, and the first request takes about a
+minute to wake it. Omni-Eye waits for that before sending.
+
+### Local run
 
 ```bash
 npm run dev                                   # Smart Mamla on http://localhost:5173
 cd ~/FYDP && bash run_dashboard.sh            # Omni-Eye node on http://localhost:8765
-# drop a video into ~/FYDP/feeds/<Camera location>/ ... reports appear under AI reports
 ```
 
-For anything beyond a local demo, set the same `OMNIEYE_INGEST_KEY` in this `.env` and in Omni-Eye's
-environment. The default is `omnieye-dev-key`.
+Omni-Eye reads its settings from `~/FYDP/dashboard/smartmamla.env`:
+- `SMARTMAMLA_URL`: the backend that receives the reports (the Render URL)
+- `SMARTMAMLA_SITE`: the Vercel site, used for the "Open in Smart Mamla" links
+- `OMNIEYE_INGEST_KEY`: the shared key
+
+For local testing, leave both URLs empty and use `omnieye-dev-key`.
 
 ## Project structure
 

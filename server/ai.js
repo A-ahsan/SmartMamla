@@ -11,7 +11,12 @@
 //   POST /api/ai/reports/:id/review     (police — { action: 'filed' | 'dismissed' | 'pending', case_number?, plate? })
 //   GET  /api/ai/evidence/:file         (evidence JPEGs; file names are random and unguessable)
 //
-// Reports are kept in server/ai_data/reports.json and server/ai_data/evidence/*.jpg.
+// Storage
+//  • Supabase Storage (used on Render/Vercel, or whenever SUPABASE_SERVICE_ROLE_KEY is set): a private bucket
+//    "omnieye-reports" holding reports.json + evidence/*.jpg. The bucket is created on first use.
+//    No database tables are touched.
+//  • Local files (dev without a service key): server/ai_data/reports.json + server/ai_data/evidence/*.jpg.
+//  Force one with AI_STORE=supabase | file.
 
 import express from 'express'
 import cors from 'cors'
@@ -26,15 +31,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // ES imports run before app.js calls dotenv, so read the same .env files here.
 dotenv.config({ path: path.join(__dirname, '..', '.env') })
 dotenv.config({ path: path.join(__dirname, '.env') })
-const DATA_DIR = process.env.AI_DATA_DIR || path.join(__dirname, 'ai_data')
-const EVIDENCE_DIR = path.join(DATA_DIR, 'evidence')
-const STORE = path.join(DATA_DIR, 'reports.json')
-fs.mkdirSync(EVIDENCE_DIR, { recursive: true })
-
-const INGEST_KEY = process.env.OMNIEYE_INGEST_KEY || 'omnieye-dev-key'
+// Running on a host (Render sets RENDER=true, Vercel sets VERCEL=1) rather than on a laptop
+const DEPLOYED = Boolean(process.env.RENDER || process.env.VERCEL || process.env.NODE_ENV === 'production')
+// The development key is public (it's in the repo), so a deployed server only accepts a key it was given.
+const INGEST_KEY = process.env.OMNIEYE_INGEST_KEY || (DEPLOYED ? null : 'omnieye-dev-key')
 if (!process.env.OMNIEYE_INGEST_KEY)
-  console.warn('⚠ SmartMamla AI: OMNIEYE_INGEST_KEY not set, using the development key "omnieye-dev-key"')
-const ALLOW_DEMO = process.env.AI_ALLOW_DEMO !== 'false'
+  console.warn(
+    DEPLOYED
+      ? '⚠ SmartMamla AI: OMNIEYE_INGEST_KEY is not set, so Omni-Eye reports are refused. Add it to the server environment (Render → Environment).'
+      : '⚠ SmartMamla AI: OMNIEYE_INGEST_KEY not set, using the development key "omnieye-dev-key"'
+  )
+// "x-demo: 1" lets the demo build use the police pages without a Supabase login — never on a deployed server
+// unless AI_ALLOW_DEMO=true.
+const ALLOW_DEMO = process.env.AI_ALLOW_DEMO ? process.env.AI_ALLOW_DEMO !== 'false' : !DEPLOYED
 
 // Same public project the frontend uses (see src/lib/supabase.js). Only used to verify police sign-ins.
 const SB_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://tcqatmkqmvaseakicqkr.supabase.co'
@@ -45,20 +54,124 @@ const SB_ANON =
 const SB_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 /* ───────────── store ───────────── */
-let reports = []
-try {
-  reports = JSON.parse(fs.readFileSync(STORE, 'utf8'))
-} catch {
-  reports = []
+const STORE_KIND = process.env.AI_STORE || (SB_SERVICE || DEPLOYED ? 'supabase' : 'file')
+const BUCKET = process.env.AI_BUCKET || 'omnieye-reports'
+
+// Local files — for `npm run dev` without a service key. (Render's free disk is wiped on every restart.) Kept in memory, written back shortly after changes.
+function fileStore() {
+  const DATA_DIR = process.env.AI_DATA_DIR || path.join(__dirname, 'ai_data')
+  const EVIDENCE_DIR = path.join(DATA_DIR, 'evidence')
+  const STORE = path.join(DATA_DIR, 'reports.json')
+  fs.mkdirSync(EVIDENCE_DIR, { recursive: true })
+  let reports = []
+  try {
+    reports = JSON.parse(fs.readFileSync(STORE, 'utf8'))
+  } catch {
+    reports = []
+  }
+  let timer = null
+  return {
+    kind: 'file',
+    async load() {
+      return reports
+    },
+    async save(list) {
+      reports = list
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        fs.writeFileSync(STORE + '.tmp', JSON.stringify(reports, null, 1))
+        fs.renameSync(STORE + '.tmp', STORE)
+      }, 150)
+    },
+    async putImage(name, buf) {
+      fs.writeFileSync(path.join(EVIDENCE_DIR, name), buf)
+    },
+    async sendImage(name, res) {
+      const p = path.join(EVIDENCE_DIR, name)
+      if (!fs.existsSync(p)) return res.status(404).end()
+      res.set('Cache-Control', 'private, max-age=86400')
+      res.sendFile(p)
+    },
+  }
 }
-let saveTimer = null
-function persist() {
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    const tmp = STORE + '.tmp'
-    fs.writeFileSync(tmp, JSON.stringify(reports, null, 1))
-    fs.renameSync(tmp, STORE)
-  }, 150)
+
+// Supabase Storage — Render (free) and Vercel have no persistent disk, so everything lives in a private bucket.
+function supabaseStore() {
+  if (!SB_SERVICE) {
+    const err = new Error('SUPABASE_SERVICE_ROLE_KEY is not set on the Smart Mamla server, so AI reports cannot be stored.')
+    const fail = async () => {
+      throw err
+    }
+    return { kind: 'supabase', error: err.message, load: fail, save: fail, putImage: fail, sendImage: fail }
+  }
+  const sb = createClient(SB_URL, SB_SERVICE, { auth: { persistSession: false } })
+  const bucket = () => sb.storage.from(BUCKET)
+  let ready = null
+  const ensureBucket = () =>
+    (ready ||= (async () => {
+      const { data } = await sb.storage.getBucket(BUCKET)
+      if (data) return
+      const { error } = await sb.storage.createBucket(BUCKET, { public: false })
+      if (error && !/exist/i.test(error.message)) throw error
+    })().catch((e) => {
+      ready = null
+      throw e
+    }))
+  const signed = new Map() // file → { url, until }
+  return {
+    kind: 'supabase',
+    async load() {
+      await ensureBucket()
+      const { data, error } = await bucket().download('reports.json', { cacheNonce: Date.now() })
+      if (error) {
+        const status = error.status || error.statusCode || error.originalError?.status
+        const msg = `${error.message} ${error.error || ''} ${status || ''}`
+        if (String(status) === '404' || /not.?found/i.test(msg)) return [] // first report ever
+        throw error // never treat a failed read as "no reports" — a save would wipe the index
+      }
+      return JSON.parse(await data.text())
+    },
+    async save(list) {
+      const { error } = await bucket().upload('reports.json', Buffer.from(JSON.stringify(list)), {
+        upsert: true,
+        contentType: 'application/json',
+        cacheControl: '0',
+      })
+      if (error) throw error
+    },
+    async putImage(name, buf) {
+      await ensureBucket()
+      const { error } = await bucket().upload(`evidence/${name}`, buf, { contentType: 'image/jpeg', cacheControl: '86400' })
+      if (error) throw error
+    },
+    async sendImage(name, res) {
+      let hit = signed.get(name)
+      if (!hit || hit.until < Date.now()) {
+        const { data, error } = await bucket().createSignedUrl(`evidence/${name}`, 3600)
+        if (error || !data?.signedUrl) return res.status(404).end()
+        hit = { url: data.signedUrl, until: Date.now() + 50 * 60_000 }
+        signed.set(name, hit)
+      }
+      res.set('Cache-Control', 'private, max-age=1800')
+      res.redirect(302, hit.url)
+    },
+  }
+}
+
+const store = STORE_KIND === 'supabase' ? supabaseStore() : fileStore()
+console.log(`SmartMamla AI: reports stored in ${store.kind === 'supabase' ? `Supabase Storage bucket "${BUCKET}"` : 'server/ai_data'}`)
+
+// One read-modify-write at a time (per server instance). Omni-Eye sends its reports one after another.
+let chain = Promise.resolve()
+function withStore(fn) {
+  const run = chain.then(async () => {
+    const list = await store.load()
+    const out = await fn(list)
+    if (out?.changed) await store.save(list)
+    return out
+  })
+  chain = run.catch(() => {})
+  return run
 }
 
 /* ───────────── violation catalogue (Omni-Eye classes → SmartMamla) ─────────────
@@ -101,19 +214,27 @@ const publicReport = (r) => ({
   images: Object.fromEntries(Object.entries(r.images || {}).map(([k, f]) => [k, f ? `/api/ai/evidence/${f}` : null])),
 })
 
-function saveImage(data, tag) {
+async function saveImage(data, tag) {
   if (!data || typeof data !== 'string') return null
   const b64 = data.replace(/^data:image\/\w+;base64,/, '')
   const buf = Buffer.from(b64, 'base64')
   if (buf.length < 100 || buf.length > 8e6) return null
   const name = `${crypto.randomBytes(12).toString('hex')}_${tag}.jpg`
-  fs.writeFileSync(path.join(EVIDENCE_DIR, name), buf)
+  await store.putImage(name, buf)
   return name
 }
 
+const fail = (res, where) => (e) => {
+  console.error(`ai ${where}`, e)
+  res.status(500).json({ error: store.error || e.message || 'Server error' })
+}
+
 const ingestAuth = (req, res, next) => {
-  if (req.get('x-omnieye-key') === INGEST_KEY) return next()
-  res.status(401).json({ error: 'Bad or missing x-omnieye-key' })
+  if (!INGEST_KEY) return res.status(401).json({ error: 'OMNIEYE_INGEST_KEY is not set on the Smart Mamla server' })
+  const got = Buffer.from(String(req.get('x-omnieye-key') || ''))
+  const want = Buffer.from(INGEST_KEY)
+  if (got.length === want.length && crypto.timingSafeEqual(got, want)) return next()
+  res.status(401).json({ error: 'Bad or missing x-omnieye-key (it must match OMNIEYE_INGEST_KEY on the Smart Mamla server)' })
 }
 
 // token → { id, name, badge } for 60 s
@@ -161,121 +282,155 @@ const ai = express.Router()
 ai.use(cors({ origin: true, credentials: true }))
 ai.use(express.json({ limit: '25mb' }))
 
-ai.get('/health', ingestAuth, (_req, res) =>
-  res.json({ ok: true, reports: reports.length, pending: reports.filter((r) => r.status === 'pending').length })
-)
+ai.get('/health', ingestAuth, async (_req, res) => {
+  try {
+    const reports = await store.load()
+    res.json({ ok: true, store: store.kind, reports: reports.length, pending: reports.filter((r) => r.status === 'pending').length })
+  } catch (e) {
+    res.status(503).json({ ok: false, store: store.kind, error: store.error || e.message })
+  }
+})
 
-ai.post('/reports', ingestAuth, (req, res) => {
+ai.post('/reports', ingestAuth, async (req, res) => {
   try {
     const b = req.body || {}
     const cls = AI_CLASSES[b.violation_class]
     if (!cls) return res.status(400).json({ error: `Unknown violation_class ${b.violation_class}` })
     const key = String(b.report_key || '')
-    const existing = key && reports.find((r) => r.report_key === key)
-    if (existing) return res.json({ ok: true, id: existing.id, duplicate: true })
 
-    const id = `AI-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
-    const images = {
-      frame: saveImage(b.images?.frame, 'frame'),
-      crop: saveImage(b.images?.crop, 'crop'),
-      plate: saveImage(b.images?.plate, 'plate'),
-    }
-    const report = {
-      id,
-      report_key: key || id,
-      status: 'pending',
-      violation_class: b.violation_class,
-      violation_en: cls.en,
-      violation_bn: cls.bn,
-      violation_codes: cls.codes,
-      violation_match: cls.match,
-      severity: cls.severity,
-      confidence: Number(b.confidence) || null,
-      mean_confidence: Number(b.mean_confidence) || null,
-      frames: Number(b.frames) || null,
-      duration_s: Number(b.duration_s) || null,
-      detected_at: b.detected_at || new Date().toISOString(),
-      video_time_s: Number(b.video_time_s) || 0,
-      camera: String(b.camera || 'Camera'),
-      location: String(b.location || b.camera || ''),
-      location_bn: String(b.location_bn || b.location || b.camera || ''),
-      node: String(b.node || 'omni-eye'),
-      model: String(b.model || ''),
-      video: String(b.video || ''),
-      job_id: String(b.job_id || ''),
-      has_plate: Boolean(images.plate),
-      plate_confidence: Number(b.plate_confidence) || null,
-      images,
-      received_at: new Date().toISOString(),
-      reviewed_at: null,
-      reviewed_by: null,
-      case_number: null,
-      plate: null,
-    }
-    reports.push(report)
-    persist()
-    res.status(201).json({ ok: true, id })
+    // cheap duplicate check before uploading any images (Omni-Eye re-sends are common)
+    const before = await store.load()
+    const dup = key && before.find((r) => r.report_key === key)
+    if (dup) return res.json({ ok: true, id: dup.id, duplicate: true })
+
+    const [frame, crop, plate] = await Promise.all([
+      saveImage(b.images?.frame, 'frame'),
+      saveImage(b.images?.crop, 'crop'),
+      saveImage(b.images?.plate, 'plate'),
+    ])
+    const images = { frame, crop, plate }
+
+    const out = await withStore((reports) => {
+      const existing = key && reports.find((r) => r.report_key === key)
+      if (existing) return { id: existing.id, duplicate: true }
+      const id = `AI-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
+      reports.push({
+        id,
+        report_key: key || id,
+        status: 'pending',
+        violation_class: b.violation_class,
+        violation_en: cls.en,
+        violation_bn: cls.bn,
+        violation_codes: cls.codes,
+        violation_match: cls.match,
+        severity: cls.severity,
+        confidence: Number(b.confidence) || null,
+        mean_confidence: Number(b.mean_confidence) || null,
+        frames: Number(b.frames) || null,
+        duration_s: Number(b.duration_s) || null,
+        detected_at: b.detected_at || new Date().toISOString(),
+        video_time_s: Number(b.video_time_s) || 0,
+        camera: String(b.camera || 'Camera'),
+        location: String(b.location || b.camera || ''),
+        location_bn: String(b.location_bn || b.location || b.camera || ''),
+        node: String(b.node || 'omni-eye'),
+        model: String(b.model || ''),
+        video: String(b.video || ''),
+        job_id: String(b.job_id || ''),
+        has_plate: Boolean(images.plate),
+        plate_confidence: Number(b.plate_confidence) || null,
+        images,
+        received_at: new Date().toISOString(),
+        reviewed_at: null,
+        reviewed_by: null,
+        case_number: null,
+        plate: null,
+      })
+      return { id, changed: true }
+    })
+    res.status(out.duplicate ? 200 : 201).json({ ok: true, id: out.id, duplicate: Boolean(out.duplicate) })
   } catch (e) {
-    console.error('ai ingest', e)
-    res.status(500).json({ error: 'Server error' })
+    fail(res, 'ingest')(e)
   }
 })
 
-ai.get('/reports', policeAuth, (req, res) => {
-  const status = req.query.status
-  const list = reports
-    .filter((r) => !status || status === 'all' || r.status === status)
-    .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at))
-  res.json(list.map(publicReport))
-})
-
-ai.get('/summary', policeAuth, (_req, res) => {
-  const today = new Date().toDateString()
-  const pending = reports.filter((r) => r.status === 'pending')
-  const byClass = {}
-  const byCamera = {}
-  for (const r of reports) {
-    if (new Date(r.detected_at).toDateString() !== today && new Date(r.received_at).toDateString() !== today) continue
-    byClass[r.violation_class] = (byClass[r.violation_class] || 0) + 1
-    byCamera[r.location || r.camera] = (byCamera[r.location || r.camera] || 0) + 1
+ai.get('/reports', policeAuth, async (req, res) => {
+  try {
+    const status = req.query.status
+    const list = (await store.load())
+      .filter((r) => !status || status === 'all' || r.status === status)
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at))
+    res.set('Cache-Control', 'no-store')
+    res.json(list.map(publicReport))
+  } catch (e) {
+    fail(res, 'list')(e)
   }
-  res.json({
-    total: reports.length,
-    pending: pending.length,
-    filed: reports.filter((r) => r.status === 'filed').length,
-    dismissed: reports.filter((r) => r.status === 'dismissed').length,
-    today: Object.values(byClass).reduce((a, b) => a + b, 0),
-    by_class: byClass,
-    by_camera: byCamera,
-    latest: pending
-      .sort((a, b) => new Date(b.received_at) - new Date(a.received_at))
-      .slice(0, 4)
-      .map(publicReport),
-  })
 })
 
-ai.post('/reports/:id/review', policeAuth, (req, res) => {
-  const r = reports.find((x) => x.id === req.params.id)
-  if (!r) return res.status(404).json({ error: 'Report not found' })
-  const action = req.body?.action
-  if (!['filed', 'dismissed', 'pending'].includes(action)) return res.status(400).json({ error: 'Bad action' })
-  r.status = action
-  r.reviewed_at = action === 'pending' ? null : new Date().toISOString()
-  r.reviewed_by = action === 'pending' ? null : req.officer
-  r.case_number = action === 'filed' ? String(req.body.case_number || '') || null : null
-  r.plate = req.body.plate ? String(req.body.plate).toUpperCase().trim() : r.plate
-  r.dismiss_reason = action === 'dismissed' ? String(req.body.reason || '') || null : null
-  persist()
-  res.json(publicReport(r))
+ai.get('/summary', policeAuth, async (_req, res) => {
+  try {
+    const reports = await store.load()
+    // "today" in Bangladesh time, whatever timezone the server runs in (Render runs in UTC)
+    const bdDay = (d) => new Date(new Date(d).getTime() + 6 * 3600_000).toISOString().slice(0, 10)
+    const today = bdDay(Date.now())
+    const pending = reports.filter((r) => r.status === 'pending')
+    const byClass = {}
+    const byCamera = {}
+    for (const r of reports) {
+      if (bdDay(r.detected_at) !== today && bdDay(r.received_at) !== today) continue
+      byClass[r.violation_class] = (byClass[r.violation_class] || 0) + 1
+      byCamera[r.location || r.camera] = (byCamera[r.location || r.camera] || 0) + 1
+    }
+    res.set('Cache-Control', 'no-store')
+    res.json({
+      total: reports.length,
+      pending: pending.length,
+      filed: reports.filter((r) => r.status === 'filed').length,
+      dismissed: reports.filter((r) => r.status === 'dismissed').length,
+      today: Object.values(byClass).reduce((a, b) => a + b, 0),
+      by_class: byClass,
+      by_camera: byCamera,
+      latest: pending
+        .sort((a, b) => new Date(b.received_at) - new Date(a.received_at))
+        .slice(0, 4)
+        .map(publicReport),
+    })
+  } catch (e) {
+    fail(res, 'summary')(e)
+  }
 })
 
-ai.get('/evidence/:file', (req, res) => {
+ai.post('/reports/:id/review', policeAuth, async (req, res) => {
+  try {
+    const action = req.body?.action
+    if (!['filed', 'dismissed', 'pending'].includes(action)) return res.status(400).json({ error: 'Bad action' })
+    const out = await withStore((reports) => {
+      const r = reports.find((x) => x.id === req.params.id)
+      if (!r) return { missing: true }
+      r.status = action
+      r.reviewed_at = action === 'pending' ? null : new Date().toISOString()
+      r.reviewed_by = action === 'pending' ? null : req.officer
+      r.case_number = action === 'filed' ? String(req.body.case_number || '') || null : null
+      r.plate = req.body.plate ? String(req.body.plate).toUpperCase().trim() : r.plate
+      r.dismiss_reason = action === 'dismissed' ? String(req.body.reason || '') || null : null
+      return { report: r, changed: true }
+    })
+    if (out.missing) return res.status(404).json({ error: 'Report not found' })
+    res.json(publicReport(out.report))
+  } catch (e) {
+    fail(res, 'review')(e)
+  }
+})
+
+ai.get('/evidence/:file', async (req, res) => {
   const f = req.params.file
   if (!/^[a-f0-9]{24}_(frame|crop|plate)\.jpg$/.test(f)) return res.status(404).end()
-  const p = path.join(EVIDENCE_DIR, f)
-  if (!fs.existsSync(p)) return res.status(404).end()
-  res.set('Cache-Control', 'private, max-age=86400')
-  res.sendFile(p)
+  try {
+    await store.sendImage(f, res)
+  } catch (e) {
+    console.error('ai evidence', e)
+    res.status(404).end()
+  }
 })
 
 export default ai
