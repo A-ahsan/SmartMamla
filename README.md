@@ -63,23 +63,43 @@ For production, build the site and run `npm run server` (standalone API on :5050
 - Before marking a case paid, the server checks the payment with SSLCommerz's validator API. It does this on both the success redirect and the IPN.
 - SSLCommerz must be able to reach the server. When deployed, set `PUBLIC_API_URL` to its public URL, and point `VITE_API_URL` in the frontend at the same address.
 
-## 4. Traffic AI model (later)
+## 4. Omni-Eye AI camera reports
 
-`src/pages/police/TrafficUpdates.jsx` → `loadTrafficFeed()` is the single integration point. Return
-`[{ id, en, bn, level: 0..1, speed }]` from your model and the map and hotspot list update automatically. The feed refreshes every 15 s.
+The Omni-Eye detection node (`~/FYDP/dashboard`) watches the footbridge camera feeds. It sends every
+violation it finds to this server. Police review each one under **AI reports** (`/police/ai`) before a
+mamla is filed. Nothing is written to Supabase until an officer presses **File a mamla**.
+
+- `server/ai.js` holds the endpoints, mounted at `/api/ai`. `npm run dev` serves them too.
+- `POST /api/ai/reports` is used by Omni-Eye. It needs the header `x-omnieye-key: <OMNIEYE_INGEST_KEY>`.
+- `GET /api/ai/reports`, `GET /api/ai/summary` and `POST /api/ai/reports/:id/review` are for police.
+  The Supabase session must belong to a `police` or `admin` profile.
+- Reports and evidence images are stored in `server/ai_data/`, which git ignores.
+- The **Traffic** page shows a live "AI camera detections" panel. It refreshes every 15 s.
+
+Run order:
+
+```bash
+npm run dev                                   # Smart Mamla on http://localhost:5173
+cd ~/FYDP && bash run_dashboard.sh            # Omni-Eye node on http://localhost:8765
+# drop a video into ~/FYDP/feeds/<Camera location>/ ... reports appear under AI reports
+```
+
+For anything beyond a local demo, set the same `OMNIEYE_INGEST_KEY` in this `.env` and in Omni-Eye's
+environment. The default is `omnieye-dev-key`.
 
 ## Project structure
 
 ```
 src/
   pages/            Landing, AuthPage, PaymentResult, SandboxGateway
-  pages/police/     TrafficUpdates, Lookup (QR + search), MyCases, Profile
+  pages/police/     TrafficUpdates, AiReports (Omni-Eye review queue), Lookup (QR + search), MyCases, Profile
   pages/citizen/    Overview, Cases (select & pay), Documents, Payments
   components/       PortalShell (sidebar + mobile tab bar), QrScanner, FileCaseSheet,
                     DriverRecord, LicenseCard (flip → QR), VehicleCard, CaseCard, Sheet …
   i18n/translations.js   all UI text in en + bn
   lib/api.js        one data layer: Supabase when configured, demo store otherwise
 server/index.js     SSLCommerz initiate / success / fail / cancel / IPN
+server/ai.js        Omni-Eye report ingest + police review queue (/api/ai)
 supabase/           schema.sql (tables + RLS), seed.sql
 ```
 

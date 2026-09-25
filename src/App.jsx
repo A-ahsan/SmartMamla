@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { Route, Routes, useLocation } from 'react-router-dom'
-import { Radar, ScanLine, FileText, UserRound, LayoutDashboard, Gavel, IdCard, ReceiptText } from 'lucide-react'
+import { Radar, ScanLine, FileText, UserRound, LayoutDashboard, Gavel, IdCard, ReceiptText, Cctv } from 'lucide-react'
 import { useApp } from './contexts/AppContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import PortalShell from './components/PortalShell'
@@ -12,6 +12,7 @@ import { CitizenDataProvider } from './pages/citizen/CitizenData'
 // Portal pages are split into their own chunks so the landing page loads fast on mobile data.
 const TrafficUpdates = lazy(() => import('./pages/police/TrafficUpdates'))
 const Lookup = lazy(() => import('./pages/police/Lookup'))
+const AiReports = lazy(() => import('./pages/police/AiReports'))
 const MyCases = lazy(() => import('./pages/police/MyCases'))
 const PoliceProfile = lazy(() => import('./pages/police/Profile'))
 const Overview = lazy(() => import('./pages/citizen/Overview'))
@@ -41,6 +42,7 @@ export default function App() {
 
   const policeNav = [
     { to: '/police', end: true, icon: Radar, label: t('p_traffic') },
+    { to: '/police/ai', icon: Cctv, label: t('p_ai'), short: t('tab_ai') },
     { to: '/police/lookup', icon: ScanLine, label: t('p_lookup'), short: t('tab_scan') },
     { to: '/police/cases', icon: FileText, label: t('p_cases') },
     { to: '/police/profile', icon: UserRound, label: t('p_profile') },
@@ -70,6 +72,7 @@ export default function App() {
             }
           >
             <Route index element={<TrafficUpdates />} />
+            <Route path="ai" element={<AiReports />} />
             <Route path="lookup" element={<Lookup />} />
             <Route path="cases" element={<MyCases />} />
             <Route path="profile" element={<PoliceProfile />} />

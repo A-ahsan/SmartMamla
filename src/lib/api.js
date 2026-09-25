@@ -513,3 +513,42 @@ export async function getOfficerStats(officerId) {
     total: cases.length,
   }
 }
+
+/* ─────────────────────────── AI reports (Omni-Eye) ───────────────────────────
+   Omni-Eye, the video-processing node, sends one report per detected violation to the
+   SmartMamla server (server/ai.js). Officers review them here and file a mamla through
+   the normal flow, or dismiss them. */
+
+async function aiFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  if (DEMO_MODE) {
+    headers['x-demo'] = '1'
+  } else {
+    const { data } = await supabase.auth.getSession()
+    if (data.session) headers.Authorization = `Bearer ${data.session.access_token}`
+  }
+  const res = await fetch(`${API_URL}/api/ai${path}`, { ...opts, headers })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
+  return body
+}
+
+export const getAiReports = (status = 'pending') => aiFetch(`/reports?status=${encodeURIComponent(status)}`)
+export const getAiSummary = () => aiFetch('/summary')
+export const reviewAiReport = (id, body) =>
+  aiFetch(`/reports/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify(body) })
+export const aiImage = (url) => (url ? `${API_URL}${url}` : null)
+
+/** The violation type that matches an AI report: by code first, then by name. */
+export function matchViolationType(types, report) {
+  if (!report || !types?.length) return null
+  for (const code of report.violation_codes || []) {
+    const hit = types.find((t) => String(t.code).toUpperCase() === code)
+    if (hit) return hit
+  }
+  if (report.violation_match) {
+    const re = new RegExp(report.violation_match, 'i')
+    return types.find((t) => re.test(t.name_en || '') || re.test(t.name_bn || '')) || null
+  }
+  return null
+}

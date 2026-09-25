@@ -9,7 +9,11 @@ import { useAuth } from '../contexts/AuthContext'
 import { getViolationTypes, fileCase } from '../lib/api'
 import { money } from '../lib/format'
 
-export default function FileCaseSheet({ open, onClose, record, onFiled }) {
+/**
+ * `preset` (optional) pre-fills the form, e.g. from an AI report:
+ *   { pick: (types) => type | null, pickVehicle: (vehicles) => id | null, location, locationBn, notes }
+ */
+export default function FileCaseSheet({ open, onClose, record, onFiled, preset }) {
   const { t, lang } = useApp()
   const { profile } = useAuth()
   const [types, setTypes] = useState([])
@@ -24,13 +28,19 @@ export default function FileCaseSheet({ open, onClose, record, onFiled }) {
 
   useEffect(() => {
     if (!open) return
-    getViolationTypes().then(setTypes).catch(() => toast.error(t('error_generic')))
     setPicked(null)
+    getViolationTypes()
+      .then((ts) => {
+        setTypes(ts)
+        if (preset?.pick) setPicked(preset.pick(ts) || null)
+      })
+      .catch(() => toast.error(t('error_generic')))
     setQuery('')
-    setNotes('')
-    setLocationBn('')
-    setVehicleId(record?.matchedVehicleId || record?.vehicles?.[0]?.id || null)
-  }, [open, record, t])
+    setNotes(preset?.notes || '')
+    setLocationBn(preset?.locationBn || '')
+    if (preset?.location) setLocation(preset.location)
+    setVehicleId(record?.matchedVehicleId || preset?.pickVehicle?.(record?.vehicles) || record?.vehicles?.[0]?.id || null)
+  }, [open, record, t, preset])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

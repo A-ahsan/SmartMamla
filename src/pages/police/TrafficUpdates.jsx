@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Radar, ScanLine, Gavel, Wallet, Clock, ArrowRight, Sparkles, MapPin, RefreshCw } from 'lucide-react'
+import { Radar, ScanLine, Gavel, Wallet, Clock, ArrowRight, MapPin, RefreshCw, Cctv, WifiOff } from 'lucide-react'
 import { useApp } from '../../contexts/AppContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { Page, StatTile, Skeleton } from '../../components/ui'
-import { getOfficerStats } from '../../lib/api'
-import { money, num, date } from '../../lib/format'
+import { getOfficerStats, getAiSummary, aiImage } from '../../lib/api'
+import { money, num, date, dateTime } from '../../lib/format'
 
 // Placeholder hotspots. Replace with the AI traffic model's output later
 // (see `loadTrafficFeed` below — it is the single integration point).
@@ -82,6 +82,75 @@ function CityMap({ spots }) {
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+
+/** Live feed of Omni-Eye camera detections waiting for review. */
+function AiPanel() {
+  const { t, lang } = useApp()
+  const [sum, setSum] = useState(null)
+  const [offline, setOffline] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    const tick = () =>
+      getAiSummary()
+        .then((s) => alive && (setSum(s), setOffline(false)))
+        .catch(() => alive && setOffline(true))
+    tick()
+    const id = setInterval(tick, 15000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
+
+  if (offline)
+    return (
+      <div className="mt-4 flex items-start gap-3 rounded-2xl border border-dashed border-amber-300 bg-amber-50/70 p-4 dark:border-amber-500/30 dark:bg-amber-500/5">
+        <WifiOff size={18} className="mt-0.5 shrink-0 text-amber-600" />
+        <div>
+          <div className="text-sm font-bold text-amber-800 dark:text-amber-200">{t('ai_offline')}</div>
+          <p className="mt-0.5 text-xs text-amber-800/70 dark:text-amber-200/70">{t('ai_offline_sub')}</p>
+        </div>
+      </div>
+    )
+
+  return (
+    <div className="mt-4 rounded-2xl border border-brand-200 bg-brand-50/60 p-4 dark:border-brand-500/30 dark:bg-brand-500/5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-bold text-brand-800 dark:text-brand-200">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-flag-500 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-flag-500" />
+          </span>
+          <Cctv size={16} /> {t('ai_live')}
+        </div>
+        <span className="text-xs font-semibold text-brand-800/70 dark:text-brand-200/70">
+          {num(sum?.pending ?? 0, lang)} {t('ai_waiting')} · {num(sum?.today ?? 0, lang)} {t('ai_today').toLowerCase()}
+        </span>
+      </div>
+      {sum?.latest?.length > 0 && (
+        <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+          {sum.latest.map((r) => (
+            <li key={r.id}>
+              <Link to="/police/ai" className="flex items-center gap-3 rounded-xl bg-white/80 p-2 transition hover:bg-white dark:bg-white/5 dark:hover:bg-white/10">
+                <img src={aiImage(r.images?.crop || r.images?.frame)} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-ink-900 object-cover" />
+                <span className="min-w-0 text-xs">
+                  <span className="block truncate font-bold text-ink-900 dark:text-white">{lang === 'bn' ? r.violation_bn : r.violation_en}</span>
+                  <span className="block truncate text-ink-500">{lang === 'bn' ? r.location_bn || r.location : r.location}</span>
+                  <span className="block truncate text-ink-400">{dateTime(r.detected_at, lang)}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Link to="/police/ai" className="group mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-700 dark:text-brand-300">
+        {t('ai_open_all')} <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+      </Link>
     </div>
   )
 }
@@ -169,13 +238,7 @@ export default function TrafficUpdates() {
             </button>
           </div>
           <CityMap spots={spots} />
-          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-dashed border-brand-300 bg-brand-50/60 p-4 dark:border-brand-500/30 dark:bg-brand-500/5">
-            <Sparkles size={18} className="mt-0.5 shrink-0 text-brand-600 dark:text-brand-300" />
-            <div>
-              <div className="text-sm font-bold text-brand-800 dark:text-brand-200">{t('traffic_ai_soon')}</div>
-              <p className="mt-0.5 text-xs text-brand-800/70 dark:text-brand-200/70">{t('traffic_ai_desc')}</p>
-            </div>
-          </div>
+          <AiPanel />
         </div>
 
         {/* Hotspots list */}

@@ -19,6 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import { sendSMS, smsConfigured, caseFiledMessage, finePaidMessage, relayCaseFiledSMS } from './sms.js'
+import ai from './ai.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // Reads SmartMamla/.env, then server/.env (you can copy brta_extended/backend/.env to server/.env)
@@ -295,5 +296,6 @@ api.post('/payment/ipn', async (req, res) => {
 })
 
 const app = express()
+app.use('/api/ai', ai) // Omni-Eye AI reports (works without the payment keys)
 app.use('/api', api)
 export default app
