@@ -134,3 +134,6 @@ supabase/           schema.sql (tables + RLS), seed.sql
 ## QR format
 
 `SMARTMAMLA|DL|<licence number>` or `SMARTMAMLA|VR|<registration number>`. A plain licence number or registration number also works.
+
+
+TEST TEST TEST TEST
