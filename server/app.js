@@ -19,7 +19,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import { sendSMS, smsConfigured, caseFiledMessage, finePaidMessage, relayCaseFiledSMS } from './sms.js'
-import ai from './ai.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // Reads SmartMamla/.env, then server/.env (you can copy brta_extended/backend/.env to server/.env)
@@ -34,6 +33,7 @@ const {
   SSLCZ_SANDBOX,
   SSLCZ_API_URL = '',
   FRONTEND_URL = 'http://localhost:5173',
+  PUBLIC_SITE_URL = 'https://smart-mamla.vercel.app',
   PUBLIC_API_URL,
 } = process.env
 
@@ -98,7 +98,8 @@ api.post('/sms/case-filed', async (req, res) => {
     const phone = await phoneOf(v.user_id)
     if (!phone) return res.json({ success: false, error: 'Driver has no phone number on file' })
 
-    const site = typeof req.body.site_url === 'string' ? req.body.site_url : FRONTEND_URL
+    // SMS links must always point to the public website, never localhost / LAN addresses
+    const site = `${PUBLIC_SITE_URL.replace(/\/$/, '')}/login`
 
     // 1) direct to BulkSMSBD (works only from a whitelisted IP)
     if (smsConfigured()) {
@@ -296,6 +297,5 @@ api.post('/payment/ipn', async (req, res) => {
 })
 
 const app = express()
-app.use('/api/ai', ai) // Omni-Eye AI reports (works without the payment keys)
 app.use('/api', api)
 export default app
