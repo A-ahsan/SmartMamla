@@ -78,17 +78,6 @@
   }
 }
 
-/* html5-qrcode renders its own video; make it fill our frame */
-#qr-reader video {
-  object-fit: cover !important;
-  width: 100% !important;
-  height: 100% !important;
-  border-radius: 1.25rem;
-}
-#qr-reader {
-  border: none !important;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
