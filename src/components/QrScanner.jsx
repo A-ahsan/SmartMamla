@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Camera, CameraOff, ImageUp, ScanLine } from 'lucide-react'
+import { Camera, CameraOff, ImageUp, ScanLine, Flashlight, ZoomIn } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useApp } from '../contexts/AppContext'
 import { Spinner } from './ui'
@@ -15,6 +15,8 @@ export default function QrScanner({ onResult, autoStart = false }) {
   const doneRef = useRef(false)
   const fileRef = useRef(null)
   const [state, setState] = useState('idle') // idle | starting | running
+  const [zoom, setZoom] = useState(null) // { min, max, step, value } when the camera supports zoom
+  const [torch, setTorch] = useState(null) // true/false when the camera has a flashlight
 
   const stop = async () => {
     const s = scannerRef.current
@@ -27,6 +29,8 @@ export default function QrScanner({ onResult, autoStart = false }) {
         /* already stopped */
       }
     }
+    setZoom(null)
+    setTorch(null)
     setState('idle')
   }
 
@@ -42,20 +46,70 @@ export default function QrScanner({ onResult, autoStart = false }) {
     doneRef.current = false
     setState('starting')
     try {
-      const { Html5Qrcode } = await import('html5-qrcode')
-      const s = new Html5Qrcode('qr-reader', { verbose: false })
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode')
+      const s = new Html5Qrcode('qr-reader', {
+        verbose: false,
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+        // Use the phone's built-in fast QR detector when available (Chrome on Android)
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      })
       scannerRef.current = s
       await s.start(
         { facingMode: 'environment' },
-        { fps: 12, qrbox: (w, h) => ({ width: Math.min(w, h) * 0.72, height: Math.min(w, h) * 0.72 }), aspectRatio: 1 },
+        {
+          fps: 15,
+          // No qrbox: scan the WHOLE frame so the code is found wherever it is in view
+          disableFlip: true,
+          videoConstraints: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' }],
+          },
+        },
         handle,
         () => {}
       )
       setState('running')
+
+      // Optional camera controls (Android Chrome): continuous focus, zoom, flashlight
+      try {
+        const caps = s.getRunningTrackCapabilities?.() || {}
+        const adv = {}
+        if (caps.focusMode?.includes?.('continuous')) adv.focusMode = 'continuous'
+        if (caps.zoom) {
+          const start = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.5))
+          adv.zoom = start
+          setZoom({ min: caps.zoom.min, max: Math.min(caps.zoom.max, 5), step: caps.zoom.step || 0.1, value: start })
+        }
+        if (Object.keys(adv).length) await s.applyVideoConstraints({ advanced: [adv] })
+        if (caps.torch) setTorch(false)
+      } catch {
+        /* controls not supported: scanning still works */
+      }
     } catch (e) {
       console.warn(e)
       toast.error(t('scan_error'))
       await stop()
+    }
+  }
+
+  const changeZoom = async (value) => {
+    setZoom((z) => z && { ...z, value })
+    try {
+      await scannerRef.current?.applyVideoConstraints({ advanced: [{ zoom: value }] })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const toggleTorch = async () => {
+    const next = !torch
+    try {
+      await scannerRef.current?.applyVideoConstraints({ advanced: [{ torch: next }] })
+      setTorch(next)
+    } catch {
+      /* ignore */
     }
   }
 
@@ -120,6 +174,35 @@ export default function QrScanner({ onResult, autoStart = false }) {
           {running && <span className="absolute inset-x-2 h-0.5 animate-scan-line rounded-full bg-brand-400 shadow-[0_0_20px_4px_rgba(47,203,154,.7)]" />}
         </div>
       </div>
+
+      {running && (zoom || torch !== null) && (
+        <div className="mx-auto mt-3 flex max-w-sm items-center gap-3 rounded-2xl bg-ink-100 px-4 py-2.5 dark:bg-white/5">
+          {zoom && (
+            <>
+              <ZoomIn size={18} className="shrink-0 text-ink-500" />
+              <input
+                type="range"
+                min={zoom.min}
+                max={zoom.max}
+                step={zoom.step}
+                value={zoom.value}
+                onChange={(e) => changeZoom(Number(e.target.value))}
+                className="h-2 flex-1 accent-brand-600"
+                aria-label="Zoom"
+              />
+            </>
+          )}
+          {torch !== null && (
+            <button
+              onClick={toggleTorch}
+              aria-label="Flashlight"
+              className={`ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${torch ? 'bg-amber-400 text-amber-950' : 'bg-white text-ink-600 dark:bg-white/10 dark:text-ink-200'}`}
+            >
+              <Flashlight size={17} />
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="mx-auto mt-4 grid max-w-sm grid-cols-2 gap-3">
         {running ? (
