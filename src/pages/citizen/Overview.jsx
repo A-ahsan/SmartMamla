@@ -37,7 +37,7 @@ export default function Overview() {
     <Page>
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-5">
         <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
-          {t('hello')}, {first} <motion.span className="inline-block origin-[70%_70%]" animate={{ rotate: [0, 18, -8, 18, 0] }} transition={{ delay: 0.5, duration: 1.2 }}>👋</motion.span>
+          {t('hello')}, {first} <motion.span className="inline-block origin-[70%_70%]" animate={{ rotate: [0, 18, -8, 18, 0] }} transition={{ delay: 0.5, duration: 1.2 }}></motion.span>
         </h1>
         <p className="text-sm text-ink-500">{t('overview_sub')}</p>
       </motion.div>
