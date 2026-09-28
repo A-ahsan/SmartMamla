@@ -277,6 +277,55 @@ async function policeAuth(req, res, next) {
   }
 }
 
+
+/* ───────────── evidence → case ─────────────
+   When an officer files a mamla from an AI report, the report's snapshots are attached to the
+   case (traffic_violations.evidence_images) so the driver sees them in their dashboard. */
+const caseDb = SB_SERVICE ? createClient(SB_URL, SB_SERVICE, { auth: { persistSession: false } }) : null
+const PUBLIC_API = (process.env.PUBLIC_API_URL || '').replace(/\/$/, '')
+
+async function attachEvidence(r) {
+  if (!caseDb || !r?.case_number) return false
+  const evidence = ['frame', 'crop', 'plate']
+    .filter((k) => r.images?.[k])
+    .map((k) => ({ kind: k, url: `/api/ai/evidence/${r.images[k]}` }))
+  if (!evidence.length) return false
+  const { error } = await caseDb
+    .from('traffic_violations')
+    .update({
+      evidence_images: evidence,
+      source: 'ai',
+      ai_report_id: r.id,
+      // BRTA Extended shows photo_evidence_url, so give it the main frame as an absolute link
+      ...(PUBLIC_API ? { photo_evidence_url: `${PUBLIC_API}${evidence[0].url}` } : {}),
+    })
+    .eq('violation_number', r.case_number)
+  if (error) console.error('ai evidence attach', r.case_number, error.message)
+  return !error
+}
+
+// Once per start: attach evidence to cases filed before this feature existed (idempotent)
+setTimeout(async () => {
+  if (!caseDb) return
+  try {
+    const reports = await store.load()
+    const filed = reports.filter((x) => x.status === 'filed' && x.case_number)
+    if (!filed.length) return
+    const { data } = await caseDb
+      .from('traffic_violations')
+      .select('violation_number, evidence_images')
+      .in('violation_number', filed.map((x) => x.case_number))
+    const missing = filed.filter((x) => {
+      const row = data?.find((d) => d.violation_number === x.case_number)
+      return row && !(row.evidence_images || []).length
+    })
+    for (const r of missing) await attachEvidence(r)
+    if (missing.length) console.log(`SmartMamla AI: attached evidence to ${missing.length} earlier case(s)`)
+  } catch (e) {
+    console.warn('ai evidence backfill skipped:', e.message)
+  }
+}, 5000)
+
 /* ───────────── routes ───────────── */
 const ai = express.Router()
 ai.use(cors({ origin: true, credentials: true }))
@@ -416,6 +465,7 @@ ai.post('/reports/:id/review', policeAuth, async (req, res) => {
       return { report: r, changed: true }
     })
     if (out.missing) return res.status(404).json({ error: 'Report not found' })
+    if (action === 'filed') await attachEvidence(out.report)
     res.json(publicReport(out.report))
   } catch (e) {
     fail(res, 'review')(e)

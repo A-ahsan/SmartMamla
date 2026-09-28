@@ -132,7 +132,20 @@ const mapCase = (tv, types = []) => ({
   due_date: tv.due_date,
   paid_at: tv.paid_at,
   transaction_id: tv.payment_id,
+  source: tv.source || 'officer',
+  evidence: evidenceOf(tv),
 })
+
+/** Evidence snapshots of a case: [{ kind: 'frame' | 'crop' | 'plate', url }] with absolute URLs */
+function evidenceOf(tv) {
+  const list =
+    Array.isArray(tv.evidence_images) && tv.evidence_images.length
+      ? tv.evidence_images
+      : tv.photo_evidence_url
+        ? [{ kind: 'frame', url: tv.photo_evidence_url }]
+        : []
+  return list.filter((e) => e?.url).map((e) => ({ ...e, url: /^https?:/i.test(e.url) ? e.url : `${API_URL}${e.url}` }))
+}
 
 const PAY_STATUS = { success: 'success', completed: 'success', initiated: 'pending', pending: 'pending', failed: 'failed', cancelled: 'failed' }
 

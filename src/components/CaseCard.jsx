@@ -3,6 +3,7 @@ import { MapPin, CalendarDays, Car, Bike, BadgeCheck, Check } from 'lucide-react
 import { useApp } from '../contexts/AppContext'
 import { money, date, isOverdue, num } from '../lib/format'
 import { StatusChip, SeverityDot } from './ui'
+import { EvidenceStrip } from './Evidence'
 
 export default function CaseCard({ c, vehicle, driverName, selectable, selected, onToggle, index = 0, showOfficer = true }) {
   const { t, lang } = useApp()
@@ -74,6 +75,7 @@ export default function CaseCard({ c, vehicle, driverName, selectable, selected,
         )}
       </div>
 
+      <EvidenceStrip c={c} />
     </Wrapper>
   )
 }

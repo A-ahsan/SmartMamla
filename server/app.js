@@ -18,6 +18,7 @@ import dotenv from 'dotenv'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
+import ai from './ai.js'
 import { sendSMS, smsConfigured, caseFiledMessage, finePaidMessage, relayCaseFiledSMS } from './sms.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -297,5 +298,6 @@ api.post('/payment/ipn', async (req, res) => {
 })
 
 const app = express()
+app.use('/api/ai', ai) // Omni-Eye AI reports (server/ai.js)
 app.use('/api', api)
 export default app
