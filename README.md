@@ -153,6 +153,28 @@ Every officer whose area matches gets their own copy.
 - Omni-Eye shows the outcome under the report status ("Summary SMS sent to 2 officers: …", or why not).
 - Code: `server/alerts.js` (matching, message, once-per-video logic), routes in `server/ai.js`.
 
+### Telegram group with the evidence photos
+
+The same "video done" call also posts to **one Telegram group for all locations**: the summary text, an
+"Open AI reports" button, and an album with the evidence photo of every violation (the crop, plus the
+plate crop when there is one). Officers in the group see the pictures immediately; the SMS stays as the
+text-only fallback. Each video is posted once.
+
+Setup (about five minutes):
+
+1. In Telegram, open **@BotFather** → `/newbot` → pick a name and a username ending in `bot`. Copy the token.
+2. Create the group (for example "Omni-Eye evidence"), add the officers, and add the bot as a member.
+   For a *channel* instead, add the bot as an administrator with permission to post.
+3. On Render → Environment, add `TELEGRAM_BOT_TOKEN` = the token. Save and wait for the redeploy.
+4. Find the group's id: open `https://<backend>.onrender.com/api/ai/telegram/chats` with the
+   `x-omnieye-key` header (or run `curl -H "x-omnieye-key: …" …`). It lists the chats the bot has seen,
+   with ids like `-1001234567890`. If the list is empty, send any message in the group and reload.
+5. Add `TELEGRAM_CHAT_ID` = that id on Render. After the redeploy, `POST /api/ai/telegram/test` (same
+   header) posts a test message to the group.
+
+Code: `server/telegram.js` (album building, Bot API calls), wired in `server/ai.js` next to the SMS.
+Omni-Eye shows "Posted to the Telegram group with N evidence photos" under the report status.
+
 ## 5. Appeals against AI-camera fines
 
 A driver can appeal a fine that came from an AI report **once**, while it is unpaid.

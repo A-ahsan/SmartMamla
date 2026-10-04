@@ -13,6 +13,10 @@
 //   POST /api/ai/alerts/video           (Omni-Eye, after a video's reports are in: one summary SMS to the
 //                                        officers whose area matches the camera location — server/alerts.js)
 //   GET  /api/ai/alerts/officers?location=…  (Omni-Eye / debugging: who would be texted for that location)
+//                                        The same call also posts the summary + evidence photos to the
+//                                        Telegram group when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set (server/telegram.js)
+//   GET  /api/ai/telegram/chats         (Omni-Eye key — chats the bot can see, to find TELEGRAM_CHAT_ID)
+//   POST /api/ai/telegram/test          (Omni-Eye key — posts a test message to the group)
 //   GET  /api/ai/officer/me             (police — own area / phone / SMS-alert setting)
 //   PUT  /api/ai/officer/me             (police — { area?, phone?, sms_alerts? })
 //
@@ -32,7 +36,8 @@ import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
 import { sendSMS } from './sms.js'
-import { alertOfficersForVideo, officerMatchesLocation } from './alerts.js'
+import { alertOfficersForVideo, officerMatchesLocation, summariseReports, videoSummaryMessage } from './alerts.js'
+import { telegramConfigured, postVideoToTelegram, listChats, botInfo } from './telegram.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // ES imports run before app.js calls dotenv, so read the same .env files here.
@@ -99,6 +104,10 @@ function fileStore() {
       res.set('Cache-Control', 'private, max-age=86400')
       res.sendFile(p)
     },
+    async getImage(name) {
+      const p = path.join(EVIDENCE_DIR, name)
+      return fs.existsSync(p) ? fs.readFileSync(p) : null
+    },
   }
 }
 
@@ -109,7 +118,7 @@ function supabaseStore() {
     const fail = async () => {
       throw err
     }
-    return { kind: 'supabase', error: err.message, load: fail, save: fail, putImage: fail, sendImage: fail }
+    return { kind: 'supabase', error: err.message, load: fail, save: fail, putImage: fail, sendImage: fail, getImage: fail }
   }
   const sb = createClient(SB_URL, SB_SERVICE, { auth: { persistSession: false } })
   const bucket = () => sb.storage.from(BUCKET)
@@ -161,6 +170,12 @@ function supabaseStore() {
       }
       res.set('Cache-Control', 'private, max-age=1800')
       res.redirect(302, hit.url)
+    },
+    async getImage(name) {
+      await ensureBucket()
+      const { data, error } = await bucket().download(`evidence/${name}`)
+      if (error || !data) return null
+      return Buffer.from(await data.arrayBuffer())
     },
   }
 }
@@ -511,8 +526,9 @@ ai.post('/alerts/video', ingestAuth, async (req, res) => {
   try {
     const b = req.body || {}
     if (!b.job_id) return res.status(400).json({ error: 'job_id is required' })
-    const out = await withStore((reports) =>
-      alertOfficersForVideo({
+    const out = await withStore(async (reports) => {
+      // 1) SMS to the officers of the area
+      const sms = await alertOfficersForVideo({
         reports,
         job_id: b.job_id,
         node: b.node,
@@ -523,10 +539,35 @@ ai.post('/alerts/video', ingestAuth, async (req, res) => {
         findOfficers,
         send: sendSMS,
       })
-    )
+      let changed = Boolean(sms.changed)
+      // 2) the same summary plus the evidence photos to the Telegram group (all locations, once per video)
+      let telegram = { ok: false, skipped: 'not_configured' }
+      if (telegramConfigured()) {
+        const jobId = String(b.job_id)
+        const mine = reports.filter((r) => r.job_id === jobId && (!b.node || !r.node || r.node === b.node))
+        if (!mine.length) telegram = { ok: true, skipped: 'no_reports' }
+        else if (mine.every((r) => r.telegram_alert)) telegram = { ok: true, skipped: 'already_sent', at: mine[0].telegram_alert.at }
+        else {
+          const loc = String(b.location || mine[0].location || mine[0].camera || '').trim()
+          const message = videoSummaryMessage({ location: loc, summary: summariseReports(mine), site: REVIEW_URL })
+          try {
+            telegram = await postVideoToTelegram({ message, reports: mine, getImage: (n) => store.getImage(n), site: REVIEW_URL })
+            const at = new Date().toISOString()
+            for (const r of mine) r.telegram_alert = { at, chat: telegram.chat }
+            changed = true
+          } catch (e) {
+            telegram = { ok: false, error: e.message }
+          }
+        }
+      }
+      return { ...sms, telegram, changed }
+    })
     const { changed, ...body } = out
     if (body.ok) console.log(`SmartMamla AI: texted ${body.sent ?? 0} officer(s) about ${b.job_id} (${body.location})${body.skipped ? ` [${body.skipped}]` : ''}`)
     else console.warn(`SmartMamla AI: officer SMS for ${b.job_id} not sent: ${body.error || body.skipped}`)
+    const tg = body.telegram
+    if (tg?.ok && !tg.skipped) console.log(`SmartMamla AI: posted ${b.job_id} to Telegram with ${tg.photos} photo(s)`)
+    else if (tg && !tg.ok && tg.skipped !== 'not_configured') console.warn(`SmartMamla AI: Telegram post for ${b.job_id} failed: ${tg.error}`)
     res.json(body)
   } catch (e) {
     fail(res, 'alert')(e)
@@ -550,6 +591,31 @@ ai.get('/alerts/officers', ingestAuth, async (req, res) => {
     })
   } catch (e) {
     fail(res, 'alert officers')(e)
+  }
+})
+
+// Telegram setup helpers: which chats the bot can see (to find TELEGRAM_CHAT_ID), and a test post.
+ai.get('/telegram/chats', ingestAuth, async (_req, res) => {
+  if (!process.env.TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: 'TELEGRAM_BOT_TOKEN is not set on the Smart Mamla server' })
+  try {
+    const [bot, chats] = await Promise.all([botInfo(), listChats()])
+    res.json({
+      bot,
+      configured_chat: process.env.TELEGRAM_CHAT_ID || null,
+      chats,
+      hint: chats.length ? 'Put the id of your group in TELEGRAM_CHAT_ID on Render.' : 'No chats yet: add the bot to the group (or send it a message), then reload.',
+    })
+  } catch (e) {
+    res.status(502).json({ error: e.message })
+  }
+})
+
+ai.post('/telegram/test', ingestAuth, async (_req, res) => {
+  if (!telegramConfigured()) return res.status(503).json({ error: 'TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must both be set on the Smart Mamla server' })
+  try {
+    res.json(await postVideoToTelegram({ message: 'Smart Mamla test: Omni-Eye evidence for processed videos will be posted here.', reports: [], getImage: async () => null, site: REVIEW_URL }))
+  } catch (e) {
+    res.status(502).json({ error: e.message })
   }
 })
 
