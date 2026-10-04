@@ -54,6 +54,8 @@ export const DEMO_USERS = [
     station: 'Tejgaon Traffic Division',
     station_bn: 'তেজগাঁও ট্রাফিক বিভাগ',
     phone: '01320-000333',
+    area: 'Tejgaon, Farmgate',
+    sms_alerts: true,
   },
 ]
 

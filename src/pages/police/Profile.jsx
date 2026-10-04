@@ -1,11 +1,107 @@
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { BadgeCheck, Building2, Phone, Mail, Shield, LogOut, Moon, Languages } from 'lucide-react'
+import toast from 'react-hot-toast'
+import { BadgeCheck, Building2, Phone, Mail, Shield, LogOut, Moon, Languages, MapPin, MessageSquareText, Save } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../contexts/AppContext'
 import { useAuth } from '../../contexts/AuthContext'
-import { Page, DemoBadge } from '../../components/ui'
+import { Page, DemoBadge, Spinner, Skeleton } from '../../components/ui'
 import { LangToggle, ThemeToggle } from '../../components/Toggles'
+import { getAlertSettings, saveAlertSettings } from '../../lib/api'
 import { num } from '../../lib/format'
+
+/** Area, phone and on/off switch for the per-video SMS that Omni-Eye sends to the officers of an area. */
+function AlertSettings() {
+  const { t } = useApp()
+  const { profile, setProfile } = useAuth()
+  const [form, setForm] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    getAlertSettings(profile)
+      .then((s) => alive && setForm(s))
+      .catch((e) => {
+        if (!alive) return
+        setError(e.message || t('error_generic'))
+        setForm({ area: profile.area || '', phone: profile.phone || '', sms_alerts: profile.sms_alerts !== false })
+      })
+    return () => {
+      alive = false
+    }
+  }, [profile.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const s = await saveAlertSettings(profile, form)
+      setForm(s)
+      setProfile({ ...profile, area: s.area, phone: s.phone, sms_alerts: s.sms_alerts })
+      toast.success(t('alerts_saved'))
+    } catch (err) {
+      setError(err.message || t('error_generic'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
+
+  return (
+    <motion.form
+      onSubmit={save}
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.15 }}
+      className="card mt-5 p-6"
+    >
+      <div className="flex items-start gap-4">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
+          <MessageSquareText size={18} />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-base font-extrabold">{t('alerts_title')}</h2>
+          <p className="mt-0.5 text-xs text-ink-500">{t('alerts_sub')}</p>
+        </div>
+      </div>
+
+      {!form ? (
+        <div className="mt-5 grid gap-3">
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
+        </div>
+      ) : (
+        <div className="mt-5 grid gap-4">
+          <div>
+            <label className="label" htmlFor="alert-area">
+              {t('alerts_area')}
+            </label>
+            <input id="alert-area" className="input" value={form.area} onChange={set('area')} placeholder={t('alerts_area_ph')} autoComplete="off" />
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">{t('alerts_area_hint')}</p>
+          </div>
+          <div>
+            <label className="label" htmlFor="alert-phone">
+              {t('phone')}
+            </label>
+            <input id="alert-phone" className="input font-mono" value={form.phone} onChange={set('phone')} placeholder="017XXXXXXXX" inputMode="tel" autoComplete="tel" />
+            <p className="mt-1.5 text-[11px] text-ink-500">{t('alerts_phone_hint')}</p>
+          </div>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-ink-50 px-4 py-3 text-sm font-semibold dark:bg-white/5">
+            {t('alerts_on')}
+            <input type="checkbox" className="h-5 w-5 accent-brand-700" checked={form.sms_alerts} onChange={set('sms_alerts')} />
+          </label>
+          {error && <div className="rounded-2xl bg-flag-50 px-4 py-3 text-xs font-semibold text-flag-700 dark:bg-flag-500/10 dark:text-flag-300">{error}</div>}
+          <button disabled={busy} className="btn-primary">
+            {busy ? <Spinner /> : <Save size={17} />} {t('alerts_save')}
+          </button>
+        </div>
+      )}
+    </motion.form>
+  )
+}
 
 export default function Profile() {
   const { t, lang } = useApp()
@@ -17,6 +113,7 @@ export default function Profile() {
     { icon: BadgeCheck, label: t('badge'), value: profile.badge_number, mono: true },
     { icon: Shield, label: t('rank'), value: lang === 'bn' ? profile.rank_bn || profile.rank : profile.rank },
     { icon: Building2, label: t('station'), value: lang === 'bn' ? profile.station_bn || profile.station : profile.station },
+    { icon: MapPin, label: t('area'), value: profile.area },
     { icon: Phone, label: t('phone'), value: profile.phone && num(profile.phone, lang) },
     { icon: Mail, label: t('email'), value: profile.email },
   ].filter((r) => r.value)
@@ -86,6 +183,8 @@ export default function Profile() {
           </button>
         </div>
       </motion.div>
+
+      <AlertSettings />
     </Page>
   )
 }
