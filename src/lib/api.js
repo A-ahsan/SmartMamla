@@ -560,6 +560,28 @@ export const reviewAiReport = (id, body) =>
   aiFetch(`/reports/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify(body) })
 export const aiImage = (url) => (url ? `${API_URL}${url}` : null)
 
+/* Officer SMS alerts: Omni-Eye texts the officers whose area matches a processed video's camera
+   location (server/alerts.js). Each officer sets their area, phone and on/off switch in Profile. */
+const alertShape = (u) => ({ area: u?.area || '', phone: u?.phone || '', station: u?.station || '', sms_alerts: u?.sms_alerts !== false })
+
+export async function getAlertSettings(profile) {
+  if (DEMO_MODE) return alertShape(demoDb().users.find((u) => u.id === profile.id))
+  return aiFetch('/officer/me')
+}
+
+export async function saveAlertSettings(profile, { area, phone, sms_alerts }) {
+  if (DEMO_MODE) {
+    await wait(400)
+    const db = demoDb()
+    const u = db.users.find((x) => x.id === profile.id)
+    if (!u) throw new Error('not found')
+    Object.assign(u, { area: String(area || '').trim(), phone: String(phone || '').trim(), sms_alerts: Boolean(sms_alerts) })
+    commit(db)
+    return alertShape(u)
+  }
+  return aiFetch('/officer/me', { method: 'PUT', body: JSON.stringify({ area, phone, sms_alerts }) })
+}
+
 /** The violation type that matches an AI report: by code first, then by name. */
 export function matchViolationType(types, report) {
   if (!report || !types?.length) return null

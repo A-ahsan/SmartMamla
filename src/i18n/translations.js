@@ -224,6 +224,19 @@ export const translations = {
     badge: 'Badge',
     station: 'Station',
     rank: 'Rank',
+    area: 'Area',
+
+    // officer SMS alerts (Profile)
+    alerts_title: 'Camera alerts by SMS',
+    alerts_sub: 'When Omni-Eye finishes a video from your area, you get one SMS summarising every violation in it.',
+    alerts_area: 'My area',
+    alerts_area_ph: 'e.g. Rampura, Badda',
+    alerts_area_hint:
+      'Place names separated by commas, written as they appear in the camera location (English). You are texted when a camera location contains one of them. Your station name counts too.',
+    alerts_phone_hint: 'Bangladeshi mobile number that receives the SMS.',
+    alerts_on: 'Send me SMS alerts',
+    alerts_save: 'Save',
+    alerts_saved: 'Alert settings saved',
 
     // citizen
     c_overview: 'Overview',
@@ -516,6 +529,18 @@ export const translations = {
     badge: 'ব্যাজ',
     station: 'থানা',
     rank: 'পদবি',
+    area: 'এলাকা',
+
+    alerts_title: 'এসএমএস-এ ক্যামেরা সতর্কতা',
+    alerts_sub: 'আপনার এলাকার কোনো ভিডিও অমনি-আই বিশ্লেষণ শেষ করলে, তার সব আইন লঙ্ঘনের সারসংক্ষেপ একটি এসএমএস-এ পাবেন।',
+    alerts_area: 'আমার এলাকা',
+    alerts_area_ph: 'e.g. Rampura, Badda',
+    alerts_area_hint:
+      'কমা দিয়ে আলাদা করা জায়গার নাম, ক্যামেরার অবস্থানে যেভাবে লেখা থাকে সেভাবে (ইংরেজিতে)। ক্যামেরার অবস্থানে এর কোনো একটি থাকলে আপনাকে এসএমএস পাঠানো হবে। আপনার থানার নামও গণ্য হয়।',
+    alerts_phone_hint: 'এসএমএস পাওয়ার বাংলাদেশি মোবাইল নম্বর।',
+    alerts_on: 'আমাকে এসএমএস সতর্কতা পাঠান',
+    alerts_save: 'সংরক্ষণ',
+    alerts_saved: 'সতর্কতার সেটিংস সংরক্ষিত হয়েছে',
 
     c_overview: 'সারসংক্ষেপ',
     c_cases: 'আমার মামলা',

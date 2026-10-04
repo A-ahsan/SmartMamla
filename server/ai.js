@@ -10,6 +10,11 @@
 //   GET  /api/ai/summary                (police — counts + latest, for the Traffic page)
 //   POST /api/ai/reports/:id/review     (police — { action: 'filed' | 'dismissed' | 'pending', case_number?, plate? })
 //   GET  /api/ai/evidence/:file         (evidence JPEGs; file names are random and unguessable)
+//   POST /api/ai/alerts/video           (Omni-Eye, after a video's reports are in: one summary SMS to the
+//                                        officers whose area matches the camera location — server/alerts.js)
+//   GET  /api/ai/alerts/officers?location=…  (Omni-Eye / debugging: who would be texted for that location)
+//   GET  /api/ai/officer/me             (police — own area / phone / SMS-alert setting)
+//   PUT  /api/ai/officer/me             (police — { area?, phone?, sms_alerts? })
 //
 // Storage
 //  • Supabase Storage (used on Render/Vercel, or whenever SUPABASE_SERVICE_ROLE_KEY is set): a private bucket
@@ -26,6 +31,8 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
+import { sendSMS } from './sms.js'
+import { alertOfficersForVideo, officerMatchesLocation } from './alerts.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // ES imports run before app.js calls dotenv, so read the same .env files here.
@@ -469,6 +476,124 @@ ai.post('/reports/:id/review', policeAuth, async (req, res) => {
     res.json(publicReport(out.report))
   } catch (e) {
     fail(res, 'review')(e)
+  }
+})
+
+/* ───────────── officer SMS alerts (server/alerts.js) ─────────────
+   Officers are rows of `profiles` with role police/admin. Their area is profiles.area (added by
+   supabase/officer_area_migration.sql); without that column the station name is still matched. */
+const PUBLIC_SITE = (process.env.PUBLIC_SITE_URL || 'https://smart-mamla.vercel.app').replace(/\/$/, '')
+const REVIEW_URL = `${PUBLIC_SITE}/police/ai`
+
+const officerRow = (p) => ({
+  id: p.id,
+  name: p.full_name || p.email,
+  badge: p.badge_number || null,
+  phone: p.phone || null,
+  station: p.station || null,
+  station_bn: p.station_bn || null,
+  area: p.area || null,
+  sms_alerts: p.sms_alerts,
+})
+
+async function findOfficers() {
+  if (!caseDb) {
+    const e = new Error('SUPABASE_SERVICE_ROLE_KEY is not set on the Smart Mamla server, so officers cannot be looked up for SMS alerts')
+    e.code = 'no_db'
+    throw e
+  }
+  const { data, error } = await caseDb.from('profiles').select('*').in('role', ['police', 'admin'])
+  if (error) throw error
+  return (data || []).map(officerRow)
+}
+
+ai.post('/alerts/video', ingestAuth, async (req, res) => {
+  try {
+    const b = req.body || {}
+    if (!b.job_id) return res.status(400).json({ error: 'job_id is required' })
+    const out = await withStore((reports) =>
+      alertOfficersForVideo({
+        reports,
+        job_id: b.job_id,
+        node: b.node,
+        location: b.location,
+        video: b.video,
+        duration_s: b.duration_s,
+        site: REVIEW_URL,
+        findOfficers,
+        send: sendSMS,
+      })
+    )
+    const { changed, ...body } = out
+    if (body.ok) console.log(`SmartMamla AI: texted ${body.sent ?? 0} officer(s) about ${b.job_id} (${body.location})${body.skipped ? ` [${body.skipped}]` : ''}`)
+    else console.warn(`SmartMamla AI: officer SMS for ${b.job_id} not sent: ${body.error || body.skipped}`)
+    res.json(body)
+  } catch (e) {
+    fail(res, 'alert')(e)
+  }
+})
+
+ai.get('/alerts/officers', ingestAuth, async (req, res) => {
+  try {
+    const location = String(req.query.location || '')
+    const officers = await findOfficers()
+    res.json({
+      location,
+      officers: officers
+        .filter((o) => !location || officerMatchesLocation(o, location))
+        .map((o) => ({
+          id: o.id, name: o.name, badge: o.badge, area: o.area, station: o.station,
+          phone: o.phone ? String(o.phone).replace(/\d(?=\d{4})/g, '*') : null,
+          sms_alerts: o.sms_alerts !== false,
+          will_text: Boolean(o.phone) && o.sms_alerts !== false,
+        })),
+    })
+  } catch (e) {
+    fail(res, 'alert officers')(e)
+  }
+})
+
+const noDb = (res) => res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE_KEY is not set on the Smart Mamla server' })
+
+ai.get('/officer/me', policeAuth, async (req, res) => {
+  if (!caseDb) return noDb(res)
+  try {
+    const { data, error } = await caseDb.from('profiles').select('*').eq('id', req.officer.id).maybeSingle()
+    if (error) throw error
+    if (!data) return res.status(404).json({ error: 'Profile not found' })
+    const o = officerRow(data)
+    res.set('Cache-Control', 'no-store')
+    res.json({ area: o.area || '', phone: o.phone || '', station: o.station || '', sms_alerts: o.sms_alerts !== false })
+  } catch (e) {
+    fail(res, 'officer me')(e)
+  }
+})
+
+ai.put('/officer/me', policeAuth, async (req, res) => {
+  if (!caseDb) return noDb(res)
+  try {
+    const b = req.body || {}
+    const patch = {}
+    if ('area' in b) patch.area = String(b.area || '').trim().slice(0, 200) || null
+    if ('phone' in b) {
+      const phone = String(b.phone || '').trim().slice(0, 20)
+      if (phone && !/^(\+?880|0)1\d{9}$/.test(phone.replace(/[\s\-()]/g, '')))
+        return res.status(400).json({ error: 'Phone must be a Bangladeshi mobile number, e.g. 01712345678' })
+      patch.phone = phone || null
+    }
+    if ('sms_alerts' in b) patch.sms_alerts = Boolean(b.sms_alerts)
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to update' })
+    const { data, error } = await caseDb.from('profiles').update(patch).eq('id', req.officer.id).select('*').maybeSingle()
+    if (error) {
+      // the area / sms_alerts columns come from supabase/officer_area_migration.sql
+      if (/column .* does not exist|schema cache/i.test(error.message))
+        return res.status(409).json({ error: 'The database is missing the officer area columns. Run supabase/officer_area_migration.sql in the Supabase SQL editor.' })
+      throw error
+    }
+    const o = officerRow(data || {})
+    res.json({ area: o.area || '', phone: o.phone || '', station: o.station || '', sms_alerts: o.sms_alerts !== false })
+  } catch (e) {
+    fail(res, 'officer update')(e)
   }
 })
 

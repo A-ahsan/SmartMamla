@@ -32,8 +32,10 @@ The citizen's licence card flips to show its QR code. Scan it with the police po
 
 **Current setup:** SmartMamla uses the existing **BRTA_Extended** Supabase project and its tables
 (`profiles`, `licenses`, `registered_vehicles`, `tax_tokens`, `violation_types`, `traffic_violations`, `payments`).
-Cases filed here show up in BRTA Extended and the other way round. The only change made to that database is
-`supabase/brta_extended_migration.sql` (optional badge number / rank / station on profiles).
+Cases filed here show up in BRTA Extended and the other way round. The only changes made to that database are
+`supabase/brta_extended_migration.sql` (optional badge number / rank / station on profiles),
+`supabase/appeals_migration.sql` (appeals table) and `supabase/officer_area_migration.sql` (officer area and
+SMS-alert switch on profiles).
 **Do not run `supabase/schema.sql` on that project.** It is only for a brand-new, separate database.
 
 For a fresh project instead:
@@ -114,6 +116,39 @@ Omni-Eye reads its settings from `~/FYDP/dashboard/smartmamla.env`:
 - `OMNIEYE_INGEST_KEY`: the shared key
 
 For local testing, leave both URLs empty and use `omnieye-dev-key`.
+
+### Officer SMS when a video is processed
+
+When Omni-Eye finishes sending the reports of one video, it calls `POST /api/ai/alerts/video`. The backend
+then sends **one SMS** to every officer whose area matches the camera location, summarising all the
+violations in that video:
+
+```
+Omni-Eye: 8 violations at Rampura footbridge
+18/09/2026 16:49, IMG_2836.MOV (1:06)
+No helmet 5, 3+ riders 2, Wrong side 1
+Plate visible: 3/8
+Review: https://smart-mamla.vercel.app/police/ai
+```
+
+- **Who gets it:** officers (`profiles.role` police/admin) with a phone number, `sms_alerts` on, and an
+  `area` that matches the location. `area` is free text, several places separated by commas, e.g.
+  `Rampura, Badda`. A place matches when every word of it appears in the camera location (or the other
+  way round); generic words such as footbridge, traffic, division or Dhaka are ignored, so the station
+  name is matched as a fallback (`Tejgaon Traffic Division` matches `Tejgaon footbridge`). `*` matches
+  everything.
+- **Setup once:** run `supabase/officer_area_migration.sql` in the Supabase SQL editor (adds
+  `profiles.area` and `profiles.sms_alerts`), and set `SMS_API_KEY`, `SMS_SENDER_ID` and
+  `PUBLIC_SITE_URL` on Render.
+- **Officers set their own area and phone** under Police → **Profile → Camera alerts by SMS**
+  (`PUT /api/ai/officer/me`), or you set them with the SQL in the migration file.
+- A video is texted once. Pressing "Send again" in Omni-Eye does not text anyone again, unless new
+  reports were added. If no officer matched or SMS was not configured, the video is not marked, so
+  fixing that and pressing "Send again" sends the SMS.
+- Check who would be texted for a location:
+  `GET /api/ai/alerts/officers?location=Rampura%20footbridge` with the `x-omnieye-key` header.
+- Omni-Eye shows the outcome under the report status ("Summary SMS sent to 2 officers: …", or why not).
+- Code: `server/alerts.js` (matching, message, once-per-video logic), routes in `server/ai.js`.
 
 ## 5. Appeals against AI-camera fines
 
