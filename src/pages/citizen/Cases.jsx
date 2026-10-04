@@ -4,17 +4,21 @@ import { CreditCard, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { useApp } from '../../contexts/AppContext'
 import { Page, PageHeader, Skeleton, EmptyState, Spinner } from '../../components/ui'
 import CaseCard from '../../components/CaseCard'
+import { AppealSheet } from '../../components/Appeal'
 import { useCitizen } from './CitizenData'
 import { money, num } from '../../lib/format'
 
 export default function Cases() {
   const { t, lang } = useApp()
-  const { record, pay, paying } = useCitizen()
+  const { record, pay, paying, reload } = useCitizen()
   const [tab, setTab] = useState('unpaid')
   const [selected, setSelected] = useState([])
+  const [appealing, setAppealing] = useState(null) // the case being appealed
 
   const unpaid = useMemo(() => (record?.cases || []).filter((c) => c.status === 'unpaid'), [record])
-  const others = useMemo(() => (record?.cases || []).filter((c) => c.status !== 'unpaid'), [record])
+  // fines under appeal stay on the first tab (nothing to pay until police decide)
+  const underAppeal = useMemo(() => (record?.cases || []).filter((c) => c.status === 'disputed'), [record])
+  const others = useMemo(() => (record?.cases || []).filter((c) => !['unpaid', 'disputed'].includes(c.status)), [record])
 
   // pre-select everything unpaid
   useEffect(() => {
@@ -24,7 +28,7 @@ export default function Cases() {
   const total = unpaid.filter((c) => selected.includes(c.id)).reduce((s, c) => s + Number(c.fine_amount), 0)
   const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
   const vById = (id) => record?.vehicles.find((v) => v.id === id)
-  const list = tab === 'unpaid' ? unpaid : others
+  const list = tab === 'unpaid' ? [...unpaid, ...underAppeal] : others
 
   return (
     <Page>
@@ -32,7 +36,7 @@ export default function Cases() {
 
       <div className="mb-4 inline-flex rounded-full bg-ink-100 p-1 dark:bg-white/5">
         {[
-          { id: 'unpaid', label: t('s_unpaid'), n: unpaid.length },
+          { id: 'unpaid', label: t('s_unpaid'), n: unpaid.length + underAppeal.length },
           { id: 'history', label: t('case_history'), n: others.length },
         ].map((x) => (
           <button key={x.id} onClick={() => setTab(x.id)} className="relative rounded-full px-4 py-2 text-sm font-semibold">
@@ -58,9 +62,10 @@ export default function Cases() {
               c={c}
               vehicle={vById(c.vehicle_id)}
               index={i}
-              selectable={tab === 'unpaid'}
+              selectable={tab === 'unpaid' && c.status === 'unpaid'}
               selected={selected.includes(c.id)}
               onToggle={() => toggle(c.id)}
+              onAppeal={setAppealing}
             />
           ))}
         </div>
@@ -97,6 +102,8 @@ export default function Cases() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AppealSheet c={appealing} onClose={() => setAppealing(null)} onDone={reload} />
     </Page>
   )
 }

@@ -115,6 +115,18 @@ Omni-Eye reads its settings from `~/FYDP/dashboard/smartmamla.env`:
 
 For local testing, leave both URLs empty and use `omnieye-dev-key`.
 
+## 5. Appeals against AI-camera fines
+
+A driver can appeal a fine that came from an AI report **once**, while it is unpaid.
+
+- **Driver:** My cases → "Appeal this fine" → writes a reason. The fine shows "Under appeal" and cannot be paid meanwhile.
+- **Police:** AI reports → **Appeals** tab → check the photos and the driver's reason → accept or reject (a note is required to reject).
+- **Accepted:** the fine is removed (`traffic_violations.status = 'waived'`).
+- **Rejected:** the fine stands (`status = 'active'`) and the driver gets at least 7 more days to pay.
+- **SMS:** the driver is told the result either way. Sent directly through BulkSMSBD, so the server's IP must be whitelisted there.
+- Code: `server/appeals.js` (all writes, service role), `src/components/Appeal.jsx`, `src/pages/police/AppealsQueue.jsx`.
+  Table: `violation_appeals` (`supabase/appeals_migration.sql`), read-only from the browser.
+
 ## Project structure
 
 ```

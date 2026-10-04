@@ -110,7 +110,9 @@ async function violationTypes() {
   return typeCache
 }
 
-const mapCase = (tv, types = []) => ({
+const mapCase = (tv, types = [], appeals = []) => {
+  const appeal = appeals.find((a) => a.violation_id === tv.id) || null
+  return {
   id: tv.id,
   case_number: tv.violation_number,
   user_id: tv.user_id,
@@ -134,7 +136,11 @@ const mapCase = (tv, types = []) => ({
   transaction_id: tv.payment_id,
   source: tv.source || 'officer',
   evidence: evidenceOf(tv),
-})
+  // Appeals: only AI-camera fines, only while unpaid, and only once
+  appeal,
+  can_appeal: (tv.source || 'officer') === 'ai' && tv.status === 'active' && tv.payment_status === 'unpaid' && !appeal,
+  }
+}
 
 /** Evidence snapshots of a case: [{ kind: 'frame' | 'crop' | 'plate', url }] with absolute URLs */
 function evidenceOf(tv) {
@@ -265,7 +271,7 @@ async function recordForUser(userId) {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
     }
   }
-  const [profile, licenses, vehicles, taxTokens, violations, payments, types] = await Promise.all([
+  const [profile, licenses, vehicles, taxTokens, violations, payments, types, appeals] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).maybeSingle().then(must),
     supabase.from('licenses').select('*').eq('user_id', userId).order('issue_date', { ascending: false }).then(must),
     supabase.from('registered_vehicles').select('*').eq('user_id', userId).then(must),
@@ -279,8 +285,10 @@ async function recordForUser(userId) {
       .order('created_at', { ascending: false })
       .then(must),
     violationTypes(),
+    // RLS: a driver sees only their own appeals, police see all
+    supabase.from('violation_appeals').select('*').eq('user_id', userId).then((r) => r.data || []),
   ])
-  const cases = violations.map((v) => mapCase(v, types))
+  const cases = violations.map((v) => mapCase(v, types, appeals))
   return {
     profile: mapProfile(profile),
     licenses: licenses.map(mapLicense),
@@ -564,4 +572,39 @@ export function matchViolationType(types, report) {
     return types.find((t) => re.test(t.name_en || '') || re.test(t.name_bn || '')) || null
   }
   return null
+}
+
+/* ─────────────────────────── appeals (AI-camera fines) ───────────────────────────
+   A driver may appeal an AI-camera fine once. Police accept (fine removed) or reject (fine stands),
+   and the driver gets an SMS. All writes go through the server (server/appeals.js). */
+
+async function appealFetch(path, opts = {}) {
+  if (DEMO_MODE) throw new Error('Appeals need the live database (not available in demo mode)')
+  const { data } = await supabase.auth.getSession()
+  const res = await fetch(`${API_URL}/api/appeals${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token}` },
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = new Error(body.error || `HTTP ${res.status}`)
+    err.code = body.code
+    throw err
+  }
+  return body
+}
+
+export const submitAppeal = (caseId, reason) => appealFetch('', { method: 'POST', body: JSON.stringify({ case_id: caseId, reason }) })
+export const getAppealCount = () => appealFetch('/count').then((r) => r.pending)
+export const reviewAppeal = (id, decision, note) =>
+  appealFetch(`/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify({ decision, note }) })
+
+/** Police queue. Each item: the appeal + `c` (the case, UI shape) + driver / license / vehicle. */
+export async function getAppeals(status = 'pending') {
+  const [list, types] = await Promise.all([appealFetch(`?status=${encodeURIComponent(status)}`), violationTypes()])
+  return list.map((a) => ({
+    ...a,
+    c: a.violation ? mapCase(a.violation, types, [a]) : null,
+    vehicle: a.vehicle ? mapVehicle({ ...a.vehicle, user_id: a.user_id }) : null,
+  }))
 }

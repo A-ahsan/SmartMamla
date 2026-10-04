@@ -19,6 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import ai from './ai.js'
+import { mountAppeals } from './appeals.js'
 import { sendSMS, smsConfigured, caseFiledMessage, finePaidMessage, relayCaseFiledSMS } from './sms.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -84,6 +85,9 @@ async function phoneOf(userId) {
   const { data } = await db.from('profiles').select('phone').eq('id', userId).maybeSingle()
   return data?.phone || null
 }
+
+/* ───────────── appeals against AI-camera fines (server/appeals.js) ───────────── */
+if (configured) mountAppeals(api, { db, authUser, phoneOf, site: `${PUBLIC_SITE_URL.replace(/\/$/, '')}/login` })
 
 /* ───────────── SMS to the driver after a police officer files a case ───────────── */
 api.post('/sms/case-filed', async (req, res) => {

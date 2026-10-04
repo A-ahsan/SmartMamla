@@ -4,27 +4,31 @@ import { useApp } from '../contexts/AppContext'
 import { money, date, isOverdue, num } from '../lib/format'
 import { StatusChip, SeverityDot } from './ui'
 import { EvidenceStrip } from './Evidence'
+import { AppealBox } from './Appeal'
 
-export default function CaseCard({ c, vehicle, driverName, selectable, selected, onToggle, index = 0, showOfficer = true }) {
+export default function CaseCard({ c, vehicle, driverName, selectable, selected, onToggle, onAppeal, index = 0, showOfficer = true }) {
   const { t, lang } = useApp()
   const overdue = isOverdue(c)
   const VIcon = vehicle?.vehicle_type === 'motorcycle' ? Bike : Car
-  const Wrapper = selectable ? motion.button : motion.div
 
   return (
-    <Wrapper
-      type={selectable ? 'button' : undefined}
+    <motion.div
+      // a div (not a <button>) so the card can hold real buttons: evidence viewer, appeal
+      role={selectable ? 'button' : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      aria-pressed={selectable ? Boolean(selected) : undefined}
       onClick={selectable ? onToggle : undefined}
+      onKeyDown={selectable ? (e) => e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onToggle()) : undefined}
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index * 0.05, 0.4), duration: 0.35 }}
       whileTap={selectable ? { scale: 0.985 } : undefined}
       className={`card group relative block w-full overflow-hidden p-4 text-left transition-shadow hover:shadow-lift sm:p-5 ${
-        selected ? 'ring-2 ring-brand-500' : ''
-      }`}
+        selectable ? 'cursor-pointer' : ''
+      } ${selected ? 'ring-2 ring-brand-500' : ''}`}
     >
       <span
-        className={`absolute inset-y-0 left-0 w-1 ${c.status === 'paid' ? 'bg-brand-500' : overdue ? 'bg-flag-500' : 'bg-amber-400'}`}
+        className={`absolute inset-y-0 left-0 w-1 ${c.status === 'paid' ? 'bg-brand-500' : c.status === 'waived' ? 'bg-ink-300' : overdue ? 'bg-flag-500' : 'bg-amber-400'}`}
         aria-hidden
       />
       <div className="flex items-start justify-between gap-3">
@@ -45,7 +49,7 @@ export default function CaseCard({ c, vehicle, driverName, selectable, selected,
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <div className="text-lg font-extrabold tracking-tight">{money(c.fine_amount, lang)}</div>
+          <div className={`text-lg font-extrabold tracking-tight ${c.status === 'waived' ? 'text-ink-400 line-through' : ''}`}>{money(c.fine_amount, lang)}</div>
           {overdue ? <StatusChip status="expired" label={t('overdue')} /> : <StatusChip status={c.status} />}
         </div>
       </div>
@@ -76,6 +80,7 @@ export default function CaseCard({ c, vehicle, driverName, selectable, selected,
       </div>
 
       <EvidenceStrip c={c} />
-    </Wrapper>
+      <AppealBox c={c} onAppeal={onAppeal} />
+    </motion.div>
   )
 }

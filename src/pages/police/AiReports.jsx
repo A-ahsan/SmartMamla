@@ -9,12 +9,13 @@ import { useApp } from '../../contexts/AppContext'
 import { Page, PageHeader, Skeleton, EmptyState, Spinner, StatTile } from '../../components/ui'
 import Sheet from '../../components/Sheet'
 import FileCaseSheet from '../../components/FileCaseSheet'
+import AppealsQueue from './AppealsQueue'
 import {
-  getAiReports, getAiSummary, reviewAiReport, aiImage, matchViolationType, lookup, DEMO_MODE,
+  getAiReports, getAiSummary, reviewAiReport, aiImage, matchViolationType, lookup, DEMO_MODE, getAppealCount,
 } from '../../lib/api'
 import { num, dateTime, money } from '../../lib/format'
 
-const TABS = ['pending', 'filed', 'dismissed']
+const TABS = ['pending', 'filed', 'dismissed', 'appeals'] // 'appeals' = drivers contesting an AI fine (AppealsQueue)
 const SEV_BG = { minor: 'bg-sky-500', moderate: 'bg-amber-500', severe: 'bg-orange-600', critical: 'bg-flag-600' }
 const DEMO_PLATE = 'DHAKA METRO-GA-12-3456'
 
@@ -355,12 +356,14 @@ export default function AiReports() {
   const [open, setOpen] = useState(null)
   const [updated, setUpdated] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [appealCount, setAppealCount] = useState(null)
 
   const load = useCallback(
     async (quiet = false) => {
       if (!quiet) setRefreshing(true)
       try {
-        const [list, sum] = await Promise.all([getAiReports(tab), getAiSummary()])
+        getAppealCount().then(setAppealCount, () => {}) // badge on the Appeals tab; never blocks the page
+        const [list, sum] = await Promise.all([tab === 'appeals' ? [] : getAiReports(tab), getAiSummary()])
         setReports(list)
         setSummary(sum)
         setOffline(false)
@@ -393,7 +396,7 @@ export default function AiReports() {
     }
   }
 
-  const counts = { pending: summary?.pending, filed: summary?.filed, dismissed: summary?.dismissed }
+  const counts = { pending: summary?.pending, filed: summary?.filed, dismissed: summary?.dismissed, appeals: appealCount }
 
   return (
     <Page>
@@ -421,7 +424,7 @@ export default function AiReports() {
             {tab === f && <motion.span layoutId="ai-tab" className="absolute inset-0 rounded-full bg-white shadow-sm dark:bg-ink-700" />}
             <span className="relative">
               {t(`ai_${f}`)}{' '}
-              <span className={f === 'pending' && counts[f] ? 'text-flag-600' : 'text-ink-400'}>{counts[f] != null ? num(counts[f], lang) : ''}</span>
+              <span className={(f === 'pending' || f === 'appeals') && counts[f] ? 'text-flag-600' : 'text-ink-400'}>{counts[f] != null ? num(counts[f], lang) : ''}</span>
             </span>
           </button>
         ))}
@@ -437,7 +440,9 @@ export default function AiReports() {
         </div>
       )}
 
-      {!reports ? (
+      {tab === 'appeals' ? (
+        <AppealsQueue onChange={() => load(true)} />
+      ) : !reports ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-80" />
