@@ -124,12 +124,15 @@ then sends **one SMS** to every officer whose area matches the camera location, 
 violations in that video:
 
 ```
-Omni-Eye: 8 violations at Rampura footbridge
-18/09/2026 16:49, IMG_2836.MOV (1:06)
+8 traffic violations detected at Rampura footbridge
+Time: 18/09/2026 16:49
 No helmet 5, 3+ riders 2, Wrong side 1
 Plate visible: 3/8
-Review: https://smart-mamla.vercel.app/police/ai
+Please go to the location and respond.
+Evidence: https://smart-mamla.vercel.app/police/ai
 ```
+
+Every officer whose area matches gets their own copy.
 
 - **Who gets it:** officers (`profiles.role` police/admin) with a phone number, `sms_alerts` on, and an
   `area` that matches the location. `area` is free text, several places separated by commas, e.g.

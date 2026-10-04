@@ -84,11 +84,6 @@ const bdTime = (d) => {
   return `${p.day}/${p.month}/${p.year} ${p.hour === '24' ? '00' : p.hour}:${p.minute}`
 }
 
-const clock = (s) => {
-  const n = Math.round(Number(s) || 0)
-  return n ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}` : ''
-}
-
 const shortName = (name, max = 28) => {
   const n = String(name || '').trim()
   return n.length <= max ? n : n.slice(0, max - 1) + '~'
@@ -108,16 +103,18 @@ export function summariseReports(reports) {
   return { total: reports.length, counts, plates, first: first === null ? null : new Date(first).toISOString() }
 }
 
-export function videoSummaryMessage({ location, video, duration_s, summary, site }) {
+/** The SMS. `video` and `duration_s` are accepted for compatibility but not shown. */
+export function videoSummaryMessage({ location, summary, site }) {
   const { total, counts, plates, first } = summary
-  const lines = [`Omni-Eye: ${total} violation${total === 1 ? '' : 's'} at ${shortName(location, 40) || 'unknown location'}`]
-  const when = [bdTime(first), [shortName(video), clock(duration_s) && `(${clock(duration_s)})`].filter(Boolean).join(' ')].filter(Boolean)
-  if (when.length) lines.push(when.join(', '))
+  const lines = [`${total} traffic violation${total === 1 ? '' : 's'} detected at ${shortName(location, 40) || 'unknown location'}`]
+  const when = bdTime(first)
+  if (when) lines.push(`Time: ${when}`)
   const parts = ORDER.filter((k) => counts[k]).map((k) => `${SHORT[k]} ${counts[k]}`)
   for (const k of Object.keys(counts)) if (!SHORT[k]) parts.push(`${k.replace(/_/g, ' ')} ${counts[k]}`)
   if (parts.length) lines.push(parts.join(', '))
   lines.push(`Plate visible: ${plates}/${total}`)
-  if (site) lines.push(`Review: ${site}`)
+  lines.push('Please go to the location and respond.')
+  if (site) lines.push(`Evidence: ${site}`)
   return lines.join('\n')
 }
 
@@ -132,7 +129,7 @@ const publicOfficer = (o) => ({ id: o.id, name: o.name, badge: o.badge || null, 
  *   reports      every stored report (the list from the store; matching entries are marked in place)
  *   job_id/node  identify the video (Omni-Eye sends them on each report)
  *   location     camera location typed in the Omni-Eye dashboard (falls back to the reports' own)
- *   video        file name, duration_s, shown in the SMS
+ *   video        file name, duration_s: accepted from the node, kept for the response, not shown in the SMS
  *   findOfficers async () → [{ id, name, badge, phone, station, area, sms_alerts }]
  *   send         async (phone, message) → { success, to?, message?, skipped? }   (sms.js sendSMS)
  *
@@ -169,7 +166,7 @@ export async function alertOfficersForVideo({ reports, job_id, node, location, v
   }
 
   const summary = summariseReports(mine)
-  const message = videoSummaryMessage({ location: loc, video: video || mine[0].video || mine[0].camera, duration_s, summary, site })
+  const message = videoSummaryMessage({ location: loc, summary, site })
 
   const results = []
   for (const o of withPhone) {
