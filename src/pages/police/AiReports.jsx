@@ -227,7 +227,18 @@ function ReviewSheet({ report, onClose, onDone }) {
             <div className="rounded-2xl bg-ink-50 p-3 dark:bg-white/5">
               <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-400">{t('ai_plate')}</div>
               {r.images?.plate ? (
-                <img src={aiImage(r.images.plate)} alt={t('ai_plate')} className="h-14 w-auto max-w-full rounded-md bg-black object-contain" />
+                <a
+                  href={aiImage(r.images.plate)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={t('ai_open_full')}
+                  className="group/plate relative inline-block overflow-hidden rounded-md bg-black ring-1 ring-transparent transition hover:ring-brand-500"
+                >
+                  <img src={aiImage(r.images.plate)} alt={t('ai_plate')} className="h-14 w-auto max-w-full object-contain transition-transform duration-300 group-hover/plate:scale-110" />
+                  <span className="absolute bottom-1 right-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition group-hover/plate:opacity-100">
+                    <Maximize2 size={11} />
+                  </span>
+                </a>
               ) : (
                 <span className="text-xs text-ink-500">{t('ai_no_plate')}</span>
               )}
